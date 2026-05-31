@@ -114,8 +114,143 @@ const MindMap = forwardRef(function MindMap(
       }
       collect(data)
       setCollapsed(ids)
+    },
+
+    // Render full map to an offscreen canvas at given scale, returns canvas
+    renderOffscreen: (scale = 2) => {
+      const tree = treeRef.current
+      if (!tree) return null
+      const col = colRef.current
+      const nodes = flatNodes(tree, col)
+
+      // compute bounding box
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      nodes.forEach(n => {
+        const w = n.d === 0 ? RW : NW
+        const h = n.d === 0 ? RH : NH
+        minX = Math.min(minX, n._x)
+        minY = Math.min(minY, n._y)
+        maxX = Math.max(maxX, n._x + w)
+        maxY = Math.max(maxY, n._y + h)
+        // include badge
+        if (col.has(n.id)) maxX = Math.max(maxX, n._x + (n.d === 0 ? RW : NW) + 28)
+      })
+
+      const PAD = 60
+      const mapW = maxX - minX + PAD * 2
+      const mapH = maxY - minY + PAD * 2
+
+      const oc = document.createElement('canvas')
+      oc.width  = mapW * scale
+      oc.height = mapH * scale
+      const ctx = oc.getContext('2d')
+      ctx.scale(scale, scale)
+
+      const dark = document.documentElement.dataset.theme !== 'light'
+      ctx.fillStyle = dark ? '#0d0d0f' : '#f5f4f0'
+      ctx.fillRect(0, 0, mapW, mapH)
+
+      // offset so minX/minY maps to PAD
+      const ox = -minX + PAD
+      const oy = -minY + PAD
+      ctx.save()
+      ctx.translate(ox, oy)
+
+      // edges
+      nodes.forEach(n => {
+        if (!n.children || n.children.length === 0 || col.has(n.id)) return
+        const [r,g,b] = hex2rgb(n.color)
+        const x1 = n._x + (n.d === 0 ? RW : NW)
+        const y1 = n._cy
+        n.children.forEach(c => {
+          const mx = (x1 + c._x) / 2
+          ctx.beginPath()
+          ctx.moveTo(x1, y1)
+          ctx.bezierCurveTo(mx, y1, mx, c._cy, c._x, c._cy)
+          ctx.strokeStyle = `rgba(${r},${g},${b},0.55)`
+          ctx.lineWidth = 1.1
+          ctx.stroke()
+        })
+      })
+
+      // nodes
+      nodes.forEach(n => {
+        const isRoot = n.d === 0
+        const w = isRoot ? RW : NW
+        const h = isRoot ? RH : NH
+        const x = n._x, y = n._y
+        const col_ = n.color || '#6366f1'
+        const [r,g,b] = hex2rgb(col_)
+        const hasCh = n.children && n.children.length > 0
+        const isCol = col.has(n.id)
+
+        ctx.beginPath()
+        ctx.roundRect(x, y, w, h, isRoot ? 14 : 8)
+        if (isRoot) ctx.fillStyle = col_
+        else ctx.fillStyle = dark ? `rgba(${r},${g},${b},0.12)` : `rgba(${r},${g},${b},0.09)`
+        ctx.fill()
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.4)`
+        ctx.lineWidth = 1
+        ctx.stroke()
+
+        // label
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        const btnsz = hasCh ? BR * 2 + 8 : 0
+        if (isRoot) {
+          ctx.font = "bold 13px 'Space Grotesk',sans-serif"
+          ctx.fillStyle = '#fff'
+          ctx.fillText(n.label, x + w/2, y + h/2 - 6)
+          ctx.font = "400 9px 'JetBrains Mono',monospace"
+          ctx.fillStyle = 'rgba(255,255,255,0.6)'
+          ctx.fillText('ALGO Mind Map', x + w/2, y + h/2 + 8)
+        } else {
+          const tc = dark
+            ? `rgb(${Math.min(r+130,255)},${Math.min(g+130,255)},${Math.min(b+130,255)})`
+            : `rgb(${Math.max(r-50,0)},${Math.max(g-50,0)},${Math.max(b-50,0)})`
+          ctx.font = "500 11px 'Space Grotesk',sans-serif"
+          ctx.fillStyle = tc
+          const maxW = w - 20 - btnsz
+          let lbl = n.label
+          while (ctx.measureText(lbl).width > maxW && lbl.length > 4)
+            lbl = lbl.slice(0, -4) + '…'
+          ctx.fillText(lbl, x + (w - btnsz)/2, y + h/2)
+        }
+
+        if (!isRoot) {
+          ctx.beginPath()
+          ctx.arc(x + 8, y + h/2, n.d === 1 ? 3 : 2, 0, Math.PI*2)
+          ctx.fillStyle = `rgba(${r},${g},${b},0.65)`
+          ctx.fill()
+        }
+
+        if (hasCh) {
+          const bx = x + w - BR - 5
+          const by = y + h/2
+          ctx.beginPath(); ctx.arc(bx, by, BR, 0, Math.PI*2)
+          ctx.fillStyle = isRoot ? 'rgba(255,255,255,0.18)' : dark ? `rgba(${r},${g},${b},0.2)` : `rgba(${r},${g},${b},0.14)`
+          ctx.fill()
+          ctx.strokeStyle = isRoot ? 'rgba(255,255,255,0.45)' : `rgba(${r},${g},${b},0.55)`
+          ctx.lineWidth = 1.2; ctx.stroke()
+          const sym = isRoot ? '#fff' : dark
+            ? `rgb(${Math.min(r+130,255)},${Math.min(g+130,255)},${Math.min(b+130,255)})`
+            : `rgb(${Math.max(r-50,0)},${Math.max(g-50,0)},${Math.max(b-50,0)})`
+          ctx.strokeStyle = sym; ctx.lineWidth = 1.8; ctx.lineCap = 'round'
+          ctx.beginPath(); ctx.moveTo(bx-4, by); ctx.lineTo(bx+4, by); ctx.stroke()
+          if (isCol) {
+            ctx.beginPath(); ctx.moveTo(bx, by-4); ctx.lineTo(bx, by+4); ctx.stroke()
+            const bx2 = x + w + 14
+            ctx.beginPath(); ctx.arc(bx2, by, 9, 0, Math.PI*2)
+            ctx.fillStyle = `rgba(${r},${g},${b},0.8)`; ctx.fill()
+            ctx.font = "bold 8px 'Space Grotesk',sans-serif"
+            ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+            ctx.fillText(String(n.children.length), bx2, by)
+          }
+        }
+      })
+      ctx.restore()
+      return oc
     }
-  }), [data])
+  }), [data, collapsed])
 
   // rebuild layout when data or collapsed changes
   useEffect(() => {
