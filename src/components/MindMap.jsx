@@ -269,13 +269,46 @@ const MindMap = forwardRef(function MindMap(
     treeRef.current = buildLayout(data, initCol)
   }, [])
 
+  // Nodeni ochganda uning BEVOSITA bolalarini yopib qo'yamiz
+  // Shunda galma-gal darajama-daraja ochiladi
   const toggle = useCallback((id) => {
     setCollapsed(prev => {
       const s = new Set(prev)
-      s.has(id) ? s.delete(id) : s.add(id)
+      if (s.has(id)) {
+        // Yopish — shunchaki o'chirish
+        s.delete(id)
+      } else {
+        // Ochish — bolalarini ham yopib qo'yish (agar ochiq bo'lsa)
+        s.add(id)
+      }
       return s
     })
   }, [])
+
+  // Nodeni ochganda uning to'g'ridan-to'g'ri bolalarini yopiq qilish
+  // data ichidan id bo'yicha node topib, bolalarini collapse qiladi
+  const openNode = useCallback((id) => {
+    // data tree ichidan id bo'yicha node topamiz
+    function findNode(n) {
+      if (n.id === id) return n
+      for (const c of (n.children || [])) {
+        const f = findNode(c)
+        if (f) return f
+      }
+      return null
+    }
+    const node = findNode(data)
+    setCollapsed(prev => {
+      const s = new Set(prev)
+      // o'zini ochamiz
+      s.delete(id)
+      // bolalarini yopamiz (faqat bevosita bolalar)
+      ;(node?.children || []).forEach(c => {
+        if (c.children && c.children.length > 0) s.add(c.id)
+      })
+      return s
+    })
+  }, [data])
 
   // ─── DRAW ────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -520,14 +553,14 @@ const MindMap = forwardRef(function MindMap(
     const ey = e.clientY - rect.top
     const n = hitNode(ex, ey)
     if (n) {
-      if (onBtn(n, ex, ey)) { toggle(n.id); return }
+      if (onBtn(n, ex, ey)) { colRef.current.has(n.id) ? openNode(n.id) : toggle(n.id); return }
       setSelectedId(n.id)
     } else {
       setSelectedId(null)
       panning.current = true
       ps.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }
     }
-  }, [hitNode, onBtn, toggle, pan, setSelectedId])
+  }, [hitNode, onBtn, toggle, openNode, pan, setSelectedId])
 
   const onMove = useCallback(e => {
     if (panning.current) {
@@ -569,11 +602,11 @@ const MindMap = forwardRef(function MindMap(
         onDelete(selectedId)
       if ((e.key === 'n' || e.key === 'N') && selectedId) onAddChild(selectedId)
       if (e.key === 'Escape') setSelectedId(null)
-      if (e.key === ' ' && selectedId) { e.preventDefault(); toggle(selectedId) }
+      if (e.key === ' ' && selectedId) { e.preventDefault(); colRef.current.has(selectedId) ? openNode(selectedId) : toggle(selectedId) }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [selectedId, onDelete, onAddChild, setSelectedId, toggle])
+  }, [selectedId, onDelete, onAddChild, setSelectedId, toggle, openNode])
 
   return (
     <div className="mindmap-container">
@@ -590,7 +623,7 @@ const MindMap = forwardRef(function MindMap(
             const n = flatNodes(treeRef.current || {children:[]}, colRef.current).find(x => x.id === selectedId)
             if (n) onEdit(n)
           }}>✏ Edit</button>
-          <button onClick={() => toggle(selectedId)}>
+          <button onClick={() => colRef.current.has(selectedId) ? openNode(selectedId) : toggle(selectedId)}>
             {collapsed.has(selectedId) ? '▶ Ochish' : '▼ Yopish'}
           </button>
           <button className="del-btn" onClick={() => onDelete(selectedId)}>✕ O'chir</button>
