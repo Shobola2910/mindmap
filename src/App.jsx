@@ -5,113 +5,172 @@ import EditModal from './components/EditModal'
 import { DEFAULT_DATA } from './data'
 import './App.css'
 
-const STORAGE_KEY = 'algo_mindmap_v3'
-function deepClone(o) { return JSON.parse(JSON.stringify(o)) }
+const STORAGE_KEY = 'algo_mindmap_v1'
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj))
+}
 
 export default function App() {
   const [data, setData] = useState(() => {
-    try { const s = localStorage.getItem(STORAGE_KEY); return s ? JSON.parse(s) : deepClone(DEFAULT_DATA) }
-    catch { return deepClone(DEFAULT_DATA) }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved ? JSON.parse(saved) : deepClone(DEFAULT_DATA)
+    } catch { return deepClone(DEFAULT_DATA) }
   })
   const [theme, setTheme] = useState(() => localStorage.getItem('algo_theme') || 'dark')
-  const [zoom, setZoom] = useState(0.7)
+  const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [editNode, setEditNode] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   const [showHelp, setShowHelp] = useState(false)
   const mapRef = useRef(null)
 
-  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('algo_theme', theme) }, [theme])
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)) }, [data])
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('algo_theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+  }, [data])
+
+  // Center on load
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const w = window.innerWidth
+      const h = window.innerHeight
+      setPan({ x: w / 2 - 20, y: h / 2 - 40 })
+    }, 50)
+    return () => clearTimeout(timer)
+  }, [])
 
   const updateNode = useCallback((id, changes) => {
-    function up(n) { if (n.id === id) return { ...n, ...changes }; return { ...n, children: (n.children||[]).map(up) } }
-    setData(prev => up(prev))
+    function update(node) {
+      if (node.id === id) return { ...node, ...changes }
+      return { ...node, children: node.children.map(update) }
+    }
+    setData(prev => update(prev))
   }, [])
 
   const addChild = useCallback((parentId) => {
-    const newId = `node_${Date.now()}`
-    const newNode = { id: newId, label: 'Yangi Node', color: '#6366f1', children: [] }
-    function add(n) { if (n.id === parentId) return { ...n, children: [...(n.children||[]), newNode] }; return { ...n, children: (n.children||[]).map(add) } }
-    setData(prev => add(prev))
-    setSelectedId(newId)
+    const newNode = {
+      id: `node_${Date.now()}`,
+      label: 'Yangi Node',
+      color: '#6366f1',
+      children: []
+    }
+    function addTo(node) {
+      if (node.id === parentId) return { ...node, children: [...node.children, newNode] }
+      return { ...node, children: node.children.map(addTo) }
+    }
+    setData(prev => addTo(prev))
+    return newNode.id
   }, [])
 
   const deleteNode = useCallback((id) => {
     if (id === 'root') return
-    function del(n) { return { ...n, children: (n.children||[]).filter(c => c.id !== id).map(del) } }
-    setData(prev => del(prev))
+    function remove(node) {
+      return { ...node, children: node.children.filter(c => c.id !== id).map(remove) }
+    }
+    setData(prev => remove(prev))
     setSelectedId(null)
   }, [])
 
   const resetData = useCallback(() => {
-    if (window.confirm("Barcha ma'lumotlarni qayta tiklaysizmi?")) {
-      setData(deepClone(DEFAULT_DATA)); setZoom(0.7); setPan({ x: 0, y: 0 })
+    if (confirm('Hamma ma\'lumotlarni qayta tiklaysizmi?')) {
+      setData(deepClone(DEFAULT_DATA))
     }
   }, [])
 
-  const exportPNG = useCallback(() => {
-    const c = mapRef.current?.getCanvas?.()
-    if (!c) return
-    const a = document.createElement('a'); a.download = 'algo-mindmap.png'; a.href = c.toDataURL('image/png'); a.click()
+  const exportPNG = useCallback(async () => {
+    const canvas = mapRef.current?.getCanvas?.()
+    if (!canvas) return
+    const link = document.createElement('a')
+    link.download = 'algo-mindmap.png'
+    link.href = canvas.toDataURL('image/png')
+    link.click()
   }, [])
 
   const exportPDF = useCallback(async () => {
-    const c = mapRef.current?.getCanvas?.()
-    if (!c) return
-    try {
-      const { jsPDF } = await import('https://esm.sh/jspdf@2.5.1')
-      const imgData = c.toDataURL('image/jpeg', 0.9)
-      const W = 297, H = Math.round(297 * c.height / c.width)
-      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [W, Math.max(H, 210)] })
-      pdf.addImage(imgData, 'JPEG', 0, 0, W, H)
-      pdf.save('algo-mindmap.pdf')
-    } catch (e) { alert('PDF xatosi: ' + e.message) }
+    const canvas = mapRef.current?.getCanvas?.()
+    if (!canvas) return
+    const imgData = canvas.toDataURL('image/png')
+    const w = canvas.width, h = canvas.height
+    const ratio = w / h
+    const pdfW = 297, pdfH = pdfW / ratio
+    const { jsPDF } = await import('https://esm.sh/jspdf@2.5.1')
+    const pdf = new jsPDF({ orientation: ratio > 1 ? 'landscape' : 'portrait', unit: 'mm', format: [pdfW, Math.max(pdfH, 210)] })
+    pdf.addImage(imgData, 'PNG', 0, 0, pdfW, pdfH)
+    pdf.save('algo-mindmap.pdf')
   }, [])
 
   const exportJSON = useCallback(() => {
-    const a = document.createElement('a')
-    a.download = 'algo-mindmap.json'
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
-    a.click()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.download = 'algo-mindmap.json'
+    link.href = url
+    link.click()
+    URL.revokeObjectURL(url)
   }, [data])
 
-  const importJSON = useCallback(e => {
-    const file = e.target.files[0]; if (!file) return
+  const importJSON = useCallback((e) => {
+    const file = e.target.files[0]
+    if (!file) return
     const reader = new FileReader()
-    reader.onload = ev => { try { setData(JSON.parse(ev.target.result)) } catch { alert("Noto'g'ri JSON fayl") } }
-    reader.readAsText(file); e.target.value = ''
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result)
+        setData(parsed)
+      } catch { alert('Noto\'g\'ri JSON fayl') }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
   }, [])
+
+  const zoomIn = () => setZoom(z => Math.min(z + 0.15, 3))
+  const zoomOut = () => setZoom(z => Math.max(z - 0.15, 0.2))
+  const resetZoom = () => { setZoom(1); const w = window.innerWidth; const h = window.innerHeight; setPan({ x: w/2-20, y: h/2-40 }) }
 
   return (
     <div className="app">
       <Toolbar
-        theme={theme} zoom={zoom}
+        theme={theme}
+        zoom={zoom}
         onThemeToggle={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-        onZoomIn={() => setZoom(z => Math.min(z + 0.15, 4))}
-        onZoomOut={() => setZoom(z => Math.max(z - 0.15, 0.15))}
-        onResetZoom={() => { setZoom(0.7); setPan({ x: 0, y: 0 }) }}
-        onExportPNG={exportPNG} onExportPDF={exportPDF}
-        onExportJSON={exportJSON} onImportJSON={importJSON}
-        onReset={resetData} onHelp={() => setShowHelp(h => !h)}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onResetZoom={resetZoom}
+        onExportPNG={exportPNG}
+        onExportPDF={exportPDF}
+        onExportJSON={exportJSON}
+        onImportJSON={importJSON}
+        onReset={resetData}
+        onHelp={() => setShowHelp(h => !h)}
         selectedId={selectedId}
         onDeleteSelected={() => deleteNode(selectedId)}
-        onAddChild={() => selectedId && addChild(selectedId)}
-        onExpandAll={() => mapRef.current?.expandAll?.()}
-        onCollapseAll={() => mapRef.current?.collapseAll?.()}
+        onAddChild={() => { if (selectedId) { const nid = addChild(selectedId); setSelectedId(nid) }}}
       />
 
       <MindMap
-        ref={mapRef} data={data} zoom={zoom} pan={pan}
-        selectedId={selectedId} setZoom={setZoom} setPan={setPan}
-        setSelectedId={setSelectedId} onEdit={setEditNode}
-        onAddChild={addChild} onDelete={deleteNode}
+        ref={mapRef}
+        data={data}
+        zoom={zoom}
+        pan={pan}
+        selectedId={selectedId}
+        setZoom={setZoom}
+        setPan={setPan}
+        setSelectedId={setSelectedId}
+        onEdit={setEditNode}
+        onAddChild={addChild}
+        onDelete={deleteNode}
       />
 
       {editNode && (
         <EditModal
           node={editNode}
-          onSave={changes => { updateNode(editNode.id, changes); setEditNode(null) }}
+          onSave={(changes) => { updateNode(editNode.id, changes); setEditNode(null) }}
           onClose={() => setEditNode(null)}
           onDelete={() => { deleteNode(editNode.id); setEditNode(null) }}
         />
@@ -120,18 +179,15 @@ export default function App() {
       {showHelp && (
         <div className="help-overlay" onClick={() => setShowHelp(false)}>
           <div className="help-box" onClick={e => e.stopPropagation()}>
-            <div className="help-title">⌨ Yordam</div>
+            <div className="help-title">Yordam</div>
             <div className="help-items">
-              <div><kbd>Scroll</kbd><span>Zoom in/out</span></div>
-              <div><kbd>Drag</kbd><span>Xaritani surish</span></div>
-              <div><kbd>Click</kbd><span>Node tanlash</span></div>
-              <div><kbd>Dbl Click</kbd><span>Tahrirlash</span></div>
-              <div><kbd>Click −</kbd><span>Bo'limni yopish</span></div>
-              <div><kbd>Click +</kbd><span>Bo'limni ochish</span></div>
-              <div><kbd>Space</kbd><span>Tanlangan nodeni yop/och</span></div>
-              <div><kbd>N</kbd><span>Bola node qo'shish</span></div>
-              <div><kbd>Del</kbd><span>Node o'chirish</span></div>
-              <div><kbd>Esc</kbd><span>Tanlovni bekor qilish</span></div>
+              <div><kbd>Scroll</kbd> Zoom</div>
+              <div><kbd>Drag</kbd> Xaritani surish</div>
+              <div><kbd>Click</kbd> Node tanlash</div>
+              <div><kbd>Dbl Click</kbd> Tahrirlash</div>
+              <div><kbd>Del</kbd> O'chirish</div>
+              <div><kbd>N</kbd> Yangi bola node</div>
+              <div><kbd>Esc</kbd> Tanlovni bekor qilish</div>
             </div>
             <button className="help-close" onClick={() => setShowHelp(false)}>✕</button>
           </div>
