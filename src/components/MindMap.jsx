@@ -1,397 +1,457 @@
 import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle, useState } from 'react'
 import './MindMap.css'
 
-const NODE_W = 180
-const NODE_H = 44
-const ROOT_W = 160
-const ROOT_H = 56
-const H_GAP = 60
-const V_GAP = 14
+// ─── constants ───────────────────────────────────────────────
+const NW = 190   // node width
+const NH = 38    // node height
+const RW = 160   // root width
+const RH = 50    // root height
+const HGAP = 70  // horizontal gap between levels
+const VGAP = 8   // vertical gap between siblings
+const BR = 8     // collapse button radius
 
-function measureTree(node, depth = 0) {
-  if (!node.children || node.children.length === 0) {
-    return { ...node, _w: NODE_W, _h: NODE_H, _totalH: NODE_H, _depth: depth }
+// ─── helpers ─────────────────────────────────────────────────
+function hex2rgb(hex = '#6366f1') {
+  const c = hex.replace('#', '')
+  if (c.length < 6) return [99, 102, 241]
+  return [
+    parseInt(c.slice(0,2), 16),
+    parseInt(c.slice(2,4), 16),
+    parseInt(c.slice(4,6), 16),
+  ]
+}
+
+// ─── tree layout (pure functions) ────────────────────────────
+// Step 1: assign depth
+function setDepth(node, d = 0) {
+  node.d = d
+  ;(node.children || []).forEach(c => setDepth(c, d + 1))
+}
+
+// Step 2: compute total height (considering collapsed)
+function totalH(node, col) {
+  const self = node.d === 0 ? RH : NH
+  if (!node.children || node.children.length === 0 || col.has(node.id)) {
+    node._th = self
+    return
   }
-  const children = node.children.map(c => measureTree(c, depth + 1))
-  const totalChildH = children.reduce((s, c) => s + c._totalH, 0) + V_GAP * (children.length - 1)
-  const selfH = depth === 0 ? ROOT_H : NODE_H
-  const totalH = Math.max(selfH, totalChildH)
-  return { ...node, children, _w: NODE_W, _h: selfH, _totalH: totalH, _depth: depth }
+  node.children.forEach(c => totalH(c, col))
+  const sum = node.children.reduce((s, c) => s + c._th, 0) + VGAP * (node.children.length - 1)
+  node._th = Math.max(self, sum)
 }
 
-function layoutTree(node, x, y) {
-  const selfH = node._h
-  const selfCY = y + node._totalH / 2
-  const nodeX = x
-  const nodeY = selfCY - selfH / 2
+// Step 3: assign x/y positions
+function layout(node, x, y, col) {
+  const sw = node.d === 0 ? RW : NW
+  const sh = node.d === 0 ? RH : NH
+  node._x = x
+  node._y = y + node._th / 2 - sh / 2
+  node._cy = y + node._th / 2
 
-  let childY = y
-  const children = (node.children || []).map(child => {
-    const laid = layoutTree(child, x + (node._depth === 0 ? ROOT_W : NODE_W) + H_GAP, childY)
-    childY += child._totalH + V_GAP
-    return laid
+  if (!node.children || node.children.length === 0 || col.has(node.id)) return
+  let cy = y
+  node.children.forEach(c => {
+    layout(c, x + sw + HGAP, cy, col)
+    cy += c._th + VGAP
   })
-
-  return { ...node, children, _x: nodeX, _y: nodeY, _cx: nodeX + (node._depth === 0 ? ROOT_W : NODE_W) / 2, _cy: selfCY }
 }
 
-function flattenTree(node, acc = []) {
-  acc.push(node)
-  node.children.forEach(c => flattenTree(c, acc))
-  return acc
+// Step 4: flatten all nodes (only laid-out ones)
+function flat(node, arr = []) {
+  arr.push(node)
+  if (!col_cache.has(node.id)) {
+    ;(node.children || []).forEach(c => flat(c, arr))
+  }
+  return arr
 }
 
-function hexToRgb(hex) {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return { r, g, b }
+// We need collapsed set accessible in flat — use closure approach
+function flatNodes(node, col, arr = []) {
+  arr.push(node)
+  if (!col.has(node.id)) {
+    ;(node.children || []).forEach(c => flatNodes(c, col, arr))
+  }
+  return arr
 }
 
-function lighten(hex, amount = 0.15) {
-  const { r, g, b } = hexToRgb(hex)
-  return `rgba(${r},${g},${b},${amount})`
+let col_cache = new Set()
+
+function buildLayout(data, col) {
+  col_cache = col
+  const tree = JSON.parse(JSON.stringify(data))
+  setDepth(tree)
+  totalH(tree, col)
+  layout(tree, 0, -tree._th / 2, col)
+  return tree
 }
 
-const MindMap = forwardRef(function MindMap({
-  data, zoom, pan, selectedId, setZoom, setPan, setSelectedId, onEdit, onAddChild, onDelete
-}, ref) {
-  const canvasRef = useRef(null)
-  const offscreenRef = useRef(null)
-  const isDragging = useRef(false)
-  const dragStart = useRef({ x: 0, y: 0, px: 0, py: 0 })
-  const hoveredRef = useRef(null)
-  const [hovered, setHovered] = useState(null)
-  const layoutRef = useRef(null)
-  const isDark = document.documentElement.getAttribute('data-theme') !== 'light'
+// ─── component ───────────────────────────────────────────────
+const MindMap = forwardRef(function MindMap(
+  { data, zoom, pan, selectedId, setZoom, setPan, setSelectedId, onEdit, onAddChild, onDelete },
+  ref
+) {
+  const cvs = useRef(null)
+  const treeRef = useRef(null)
+  const [collapsed, setCollapsed] = useState(new Set())
+  const [hov, setHov] = useState(null)
+  const hovRef = useRef(null)
+  const panning = useRef(false)
+  const ps = useRef({ x:0, y:0, px:0, py:0 })
+  const colRef = useRef(collapsed)
+  colRef.current = collapsed
 
+  // expose methods
   useImperativeHandle(ref, () => ({
-    getCanvas: () => canvasRef.current
-  }))
-
-  const getLayout = useCallback(() => {
-    const measured = measureTree(data)
-    const layout = layoutTree(measured, 0, 0)
-    layoutRef.current = layout
-    return layout
-  }, [data])
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const dpr = window.devicePixelRatio || 1
-    const W = canvas.offsetWidth
-    const H = canvas.offsetHeight
-
-    if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
-      canvas.width = W * dpr
-      canvas.height = H * dpr
+    getCanvas: () => cvs.current,
+    expandAll: () => setCollapsed(new Set()),
+    collapseAll: () => {
+      const ids = new Set()
+      function collect(n) {
+        if (n.children && n.children.length > 0) {
+          ids.add(n.id)
+          n.children.forEach(collect)
+        }
+      }
+      collect(data)
+      setCollapsed(ids)
     }
+  }), [data])
+
+  // rebuild layout when data or collapsed changes
+  useEffect(() => {
+    treeRef.current = buildLayout(data, collapsed)
+  }, [data, collapsed])
+
+  // initial build
+  useEffect(() => {
+    treeRef.current = buildLayout(data, new Set())
+  }, [])
+
+  const toggle = useCallback((id) => {
+    setCollapsed(prev => {
+      const s = new Set(prev)
+      s.has(id) ? s.delete(id) : s.add(id)
+      return s
+    })
+  }, [])
+
+  // ─── DRAW ────────────────────────────────────────────────────
+  const draw = useCallback(() => {
+    const canvas = cvs.current
+    if (!canvas) return
+    const tree = treeRef.current
+    if (!tree) return
+
+    const dpr = window.devicePixelRatio || 1
+    const CW = canvas.clientWidth
+    const CH = canvas.clientHeight
+    if (CW === 0 || CH === 0) return
+
+    canvas.width  = CW * dpr
+    canvas.height = CH * dpr
 
     const ctx = canvas.getContext('2d')
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.scale(dpr, dpr)
 
-    const dark = document.documentElement.getAttribute('data-theme') !== 'light'
-    const bg = dark ? '#0d0d0f' : '#f5f4f0'
-    const gridColor = dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)'
-    const textColor = dark ? '#f0eee8' : '#1a1918'
-    const subTextColor = dark ? '#9a9890' : '#6b6a65'
-    const lineBase = dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'
+    const dark = document.documentElement.dataset.theme !== 'light'
 
-    ctx.fillStyle = bg
-    ctx.fillRect(0, 0, W, H)
+    // background
+    ctx.fillStyle = dark ? '#0d0d0f' : '#f5f4f0'
+    ctx.fillRect(0, 0, CW, CH)
 
-    // Grid dots
-    const gridSize = 28 * zoom
-    const offX = (pan.x * zoom) % gridSize
-    const offY = (pan.y * zoom) % gridSize
-    ctx.fillStyle = gridColor
-    for (let gx = offX; gx < W; gx += gridSize) {
-      for (let gy = offY; gy < H; gy += gridSize) {
-        ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill()
+    // dot grid
+    const gs = 28 * zoom
+    const ox = ((pan.x * zoom % gs) + gs) % gs
+    const oy = ((pan.y * zoom % gs) + gs) % gs
+    ctx.fillStyle = dark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.045)'
+    for (let gx = ox; gx < CW; gx += gs)
+      for (let gy = oy; gy < CH; gy += gs) {
+        ctx.beginPath()
+        ctx.arc(gx, gy, 1.1, 0, Math.PI * 2)
+        ctx.fill()
       }
-    }
 
+    // world transform: origin at screen center + pan
     ctx.save()
-    ctx.translate(pan.x * zoom + W / 2 - (pan.x * zoom), pan.y * zoom + H / 2 - (pan.y * zoom))
-    ctx.translate(pan.x, pan.y)
+    ctx.translate(CW / 2 + pan.x * zoom, CH / 2 + pan.y * zoom)
     ctx.scale(zoom, zoom)
 
-    const layout = getLayout()
-    const nodes = flattenTree(layout)
+    const col = colRef.current
+    const nodes = flatNodes(tree, col)
 
-    // Draw connections first
-    nodes.forEach(node => {
-      if (!node.children || node.children.length === 0) return
-      const isRoot = node._depth === 0
-      const startX = node._x + (isRoot ? ROOT_W : NODE_W)
-      const startY = node._cy
-
-      node.children.forEach(child => {
-        const endX = child._x
-        const endY = child._cy
-        const cpX = (startX + endX) / 2
-
-        const color = child.color || '#6366f1'
-        const { r, g, b } = hexToRgb(color)
-        const opacity = selectedId && selectedId !== child.id && selectedId !== node.id ? 0.3 : 0.6
-
+    // ── edges ──
+    nodes.forEach(n => {
+      if (!n.children || n.children.length === 0 || col.has(n.id)) return
+      const [r,g,b] = hex2rgb(n.color)
+      const x1 = n._x + (n.d === 0 ? RW : NW)
+      const y1 = n._cy
+      n.children.forEach(c => {
+        const x2 = c._x
+        const y2 = c._cy
+        const mx = (x1 + x2) / 2
+        const sel = selectedId === n.id || selectedId === c.id
         ctx.beginPath()
-        ctx.moveTo(startX, startY)
-        ctx.bezierCurveTo(cpX, startY, cpX, endY, endX, endY)
-        ctx.strokeStyle = `rgba(${r},${g},${b},${opacity})`
-        ctx.lineWidth = selectedId === child.id ? 2 : 1.2
+        ctx.moveTo(x1, y1)
+        ctx.bezierCurveTo(mx, y1, mx, y2, x2, y2)
+        ctx.strokeStyle = `rgba(${r},${g},${b},${selectedId && !sel ? 0.15 : 0.55})`
+        ctx.lineWidth = sel ? 1.8 : 1.1
         ctx.stroke()
       })
     })
 
-    // Draw nodes
-    nodes.forEach(node => {
-      const isRoot = node._depth === 0
-      const w = isRoot ? ROOT_W : NODE_W
-      const h = isRoot ? ROOT_H : NODE_H
-      const x = node._x, y = node._y
-      const color = node.color || '#6366f1'
-      const isSelected = selectedId === node.id
-      const isHov = hovered === node.id
+    // ── nodes ──
+    nodes.forEach(n => {
+      const isRoot = n.d === 0
+      const w = isRoot ? RW : NW
+      const h = isRoot ? RH : NH
+      const x = n._x, y = n._y
+      const col_  = n.color || '#6366f1'
+      const [r,g,b] = hex2rgb(col_)
+      const sel = selectedId === n.id
+      const hv  = hovRef.current === n.id
+      const hasCh = n.children && n.children.length > 0
+      const isCol = collapsed.has(n.id)
 
-      const { r, g, b } = hexToRgb(color)
-
-      // Shadow for selected
-      if (isSelected) {
-        ctx.shadowColor = `rgba(${r},${g},${b},0.5)`
-        ctx.shadowBlur = 16
+      // shadow
+      if (sel) {
+        ctx.shadowColor = `rgba(${r},${g},${b},0.55)`
+        ctx.shadowBlur  = 16
       }
 
-      // Background
-      const radius = isRoot ? 16 : 10
+      // fill
       ctx.beginPath()
-      ctx.roundRect(x, y, w, h, radius)
-
-      if (isRoot) {
-        ctx.fillStyle = color
-      } else if (isSelected) {
-        ctx.fillStyle = `rgba(${r},${g},${b},0.25)`
-      } else if (isHov) {
-        ctx.fillStyle = `rgba(${r},${g},${b},0.18)`
-      } else {
-        ctx.fillStyle = dark ? `rgba(${r},${g},${b},0.12)` : `rgba(${r},${g},${b},0.08)`
-      }
+      ctx.roundRect(x, y, w, h, isRoot ? 14 : 8)
+      if (isRoot)     ctx.fillStyle = col_
+      else if (sel)   ctx.fillStyle = dark ? `rgba(${r},${g},${b},0.26)` : `rgba(${r},${g},${b},0.18)`
+      else if (hv)    ctx.fillStyle = dark ? `rgba(${r},${g},${b},0.18)` : `rgba(${r},${g},${b},0.12)`
+      else            ctx.fillStyle = dark ? `rgba(${r},${g},${b},0.1)`  : `rgba(${r},${g},${b},0.07)`
       ctx.fill()
 
-      ctx.shadowBlur = 0
+      ctx.shadowBlur  = 0
+      ctx.shadowColor = 'transparent'
 
-      // Border
-      ctx.strokeStyle = isSelected
-        ? `rgba(${r},${g},${b},0.9)`
-        : isHov ? `rgba(${r},${g},${b},0.6)`
-        : `rgba(${r},${g},${b},0.3)`
-      ctx.lineWidth = isSelected ? 2 : 1
+      // border
+      ctx.strokeStyle = sel  ? `rgba(${r},${g},${b},1)` :
+                        hv   ? `rgba(${r},${g},${b},0.7)` :
+                               `rgba(${r},${g},${b},0.32)`
+      ctx.lineWidth = sel ? 1.8 : 1
       ctx.stroke()
 
-      // Label
-      const maxW = w - 20
-      let fontSize = isRoot ? 14 : 12
-      ctx.font = `${isRoot ? 700 : 500} ${fontSize}px 'Space Grotesk', sans-serif`
-      ctx.fillStyle = isRoot ? '#fff' : (dark ? `rgba(${r > 200 ? r - 20 : r + 180},${g > 200 ? g - 20 : g + 180},${b > 200 ? b - 20 : b + 180},0.95)` : `rgba(${Math.min(r - 40, 80)},${Math.min(g - 40, 80)},${Math.min(b - 40, 80)},0.95)`)
-
-      if (isRoot) ctx.fillStyle = '#ffffff'
-      else ctx.fillStyle = dark ? color : `hsl(${getHue(color)}, 60%, 30%)`
-
-      ctx.textAlign = 'center'
+      // label
+      ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
-
-      // Truncate if needed
-      let label = node.label
-      while (ctx.measureText(label).width > maxW && label.length > 4) {
-        label = label.slice(0, -4) + '...'
-      }
+      const btnsz = hasCh ? BR * 2 + 8 : 0
 
       if (isRoot) {
-        ctx.font = `700 15px 'Space Grotesk', sans-serif`
-        ctx.fillStyle = '#ffffff'
-        ctx.fillText(label, x + w / 2, y + h / 2 - 6)
-        ctx.font = `400 10px 'JetBrains Mono', monospace`
-        ctx.fillStyle = 'rgba(255,255,255,0.7)'
-        ctx.fillText('Logistics Knowledge Map', x + w / 2, y + h / 2 + 10)
+        ctx.font      = "bold 13px 'Space Grotesk',sans-serif"
+        ctx.fillStyle = '#fff'
+        ctx.fillText(n.label, x + w / 2, y + h / 2 - 6)
+        ctx.font      = "400 9px 'JetBrains Mono',monospace"
+        ctx.fillStyle = 'rgba(255,255,255,0.6)'
+        ctx.fillText('ALGO Mind Map', x + w / 2, y + h / 2 + 8)
       } else {
-        ctx.fillText(label, x + w / 2, y + h / 2)
+        const tc = dark
+          ? `rgb(${Math.min(r+130,255)},${Math.min(g+130,255)},${Math.min(b+130,255)})`
+          : `rgb(${Math.max(r-50,0)},${Math.max(g-50,0)},${Math.max(b-50,0)})`
+        ctx.font      = "500 11px 'Space Grotesk',sans-serif"
+        ctx.fillStyle = tc
+        const maxW = w - 20 - btnsz
+        let lbl = n.label
+        while (ctx.measureText(lbl).width > maxW && lbl.length > 4)
+          lbl = lbl.slice(0, -4) + '…'
+        ctx.fillText(lbl, x + (w - btnsz) / 2, y + h / 2)
       }
 
-      // Depth indicator dot
-      if (node._depth > 0 && node._depth < 3) {
+      // depth dot
+      if (!isRoot) {
         ctx.beginPath()
-        ctx.arc(x + 10, y + h / 2, 3, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(${r},${g},${b},0.6)`
+        ctx.arc(x + 8, y + h / 2, n.d === 1 ? 3 : 2, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(${r},${g},${b},0.65)`
         ctx.fill()
+      }
+
+      // collapse button (+/-)
+      if (hasCh) {
+        const bx = x + w - BR - 5
+        const by = y + h / 2
+
+        // circle bg
+        ctx.beginPath()
+        ctx.arc(bx, by, BR, 0, Math.PI * 2)
+        ctx.fillStyle = isRoot
+          ? 'rgba(255,255,255,0.18)'
+          : dark ? `rgba(${r},${g},${b},0.2)` : `rgba(${r},${g},${b},0.14)`
+        ctx.fill()
+        ctx.strokeStyle = isRoot ? 'rgba(255,255,255,0.45)' : `rgba(${r},${g},${b},0.55)`
+        ctx.lineWidth = 1.2
+        ctx.stroke()
+
+        // bar symbol
+        const sym = isRoot ? '#fff' :
+          dark ? `rgb(${Math.min(r+130,255)},${Math.min(g+130,255)},${Math.min(b+130,255)})`
+               : `rgb(${Math.max(r-50,0)},${Math.max(g-50,0)},${Math.max(b-50,0)})`
+        ctx.strokeStyle = sym
+        ctx.lineWidth   = 1.8
+        ctx.lineCap     = 'round'
+
+        // − always
+        ctx.beginPath()
+        ctx.moveTo(bx - 4, by)
+        ctx.lineTo(bx + 4, by)
+        ctx.stroke()
+
+        // | only when collapsed (= + symbol)
+        if (isCol) {
+          ctx.beginPath()
+          ctx.moveTo(bx, by - 4)
+          ctx.lineTo(bx, by + 4)
+          ctx.stroke()
+        }
+
+        // badge when collapsed
+        if (isCol) {
+          const cnt = n.children.length
+          const bx2 = x + w + 14
+          const by2 = y + h / 2
+          ctx.beginPath()
+          ctx.arc(bx2, by2, 9, 0, Math.PI * 2)
+          ctx.fillStyle = `rgba(${r},${g},${b},0.8)`
+          ctx.fill()
+          ctx.font      = "bold 8px 'Space Grotesk',sans-serif"
+          ctx.fillStyle = '#fff'
+          ctx.textAlign    = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(String(cnt), bx2, by2)
+        }
       }
     })
 
     ctx.restore()
-  }, [data, zoom, pan, selectedId, hovered, getLayout])
+  }, [zoom, pan, selectedId, hov, data, collapsed])
 
-  function getHue(hex) {
-    const { r, g, b } = hexToRgb(hex)
-    const max = Math.max(r, g, b), min = Math.min(r, g, b)
-    let h = 0
-    if (max !== min) {
-      const d = max - min
-      if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
-      else if (max === g) h = (b - r) / d + 2
-      else h = (r - g) / d + 4
-      h *= 60
-    }
-    return h
-  }
+  // redraw on any dep change
+  useEffect(() => { requestAnimationFrame(draw) }, [draw])
 
+  // resize observer
   useEffect(() => {
-    draw()
+    if (!cvs.current) return
+    const ro = new ResizeObserver(() => requestAnimationFrame(draw))
+    ro.observe(cvs.current)
+    return () => ro.disconnect()
   }, [draw])
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const obs = new ResizeObserver(() => draw())
-    obs.observe(canvas)
-    return () => obs.disconnect()
-  }, [draw])
-
-  const getNodeAt = useCallback((clientX, clientY) => {
-    const canvas = canvasRef.current
-    if (!canvas) return null
-    const rect = canvas.getBoundingClientRect()
-    const W = canvas.offsetWidth, H = canvas.offsetHeight
-    const mx = (clientX - rect.left - pan.x - W / 2 + pan.x) / zoom - pan.x
-    const my = (clientY - rect.top - pan.y - H / 2 + pan.y) / zoom - pan.y
-
-    const layout = layoutRef.current
-    if (!layout) return null
-    const nodes = flattenTree(layout)
-
+  // ─── hit test ────────────────────────────────────────────────
+  const hitNode = useCallback((ex, ey) => {
+    if (!cvs.current || !treeRef.current) return null
+    const W = cvs.current.clientWidth
+    const H = cvs.current.clientHeight
+    const wx = (ex - W/2) / zoom - pan.x
+    const wy = (ey - H/2) / zoom - pan.y
+    const nodes = flatNodes(treeRef.current, colRef.current)
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i]
-      const isRoot = n._depth === 0
-      const w = isRoot ? ROOT_W : NODE_W
-      const h = isRoot ? ROOT_H : NODE_H
-      if (mx >= n._x && mx <= n._x + w && my >= n._y && my <= n._y + h) {
+      const w = n.d === 0 ? RW : NW
+      const h = n.d === 0 ? RH : NH
+      if (wx >= n._x && wx <= n._x + w && wy >= n._y && wy <= n._y + h)
         return n
-      }
     }
     return null
-  }, [pan, zoom])
-
-  const getCanvasCoords = useCallback((clientX, clientY) => {
-    const canvas = canvasRef.current
-    if (!canvas) return { x: 0, y: 0 }
-    const W = canvas.offsetWidth, H = canvas.offsetHeight
-    return {
-      x: (clientX - W / 2) / zoom - pan.x + W / 2,
-      y: (clientY - H / 2) / zoom - pan.y + H / 2
-    }
   }, [zoom, pan])
 
-  const handleMouseDown = useCallback((e) => {
+  const onBtn = useCallback((n, ex, ey) => {
+    if (!n.children || !n.children.length) return false
+    const W = cvs.current.clientWidth
+    const H = cvs.current.clientHeight
+    const wx = (ex - W/2) / zoom - pan.x
+    const wy = (ey - H/2) / zoom - pan.y
+    const w = n.d === 0 ? RW : NW
+    const bx = n._x + w - BR - 5
+    const by = n._cy
+    return Math.hypot(wx - bx, wy - by) <= BR + 3
+  }, [zoom, pan])
+
+  // ─── events ──────────────────────────────────────────────────
+  const onDown = useCallback(e => {
     if (e.button !== 0) return
-    const node = getNodeAt(e.clientX, e.clientY)
-    if (node) {
-      setSelectedId(node.id)
-      isDragging.current = false
+    const rect = cvs.current.getBoundingClientRect()
+    const ex = e.clientX - rect.left
+    const ey = e.clientY - rect.top
+    const n = hitNode(ex, ey)
+    if (n) {
+      if (onBtn(n, ex, ey)) { toggle(n.id); return }
+      setSelectedId(n.id)
     } else {
       setSelectedId(null)
-      isDragging.current = true
-      dragStart.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }
+      panning.current = true
+      ps.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }
     }
-  }, [getNodeAt, pan, setSelectedId])
+  }, [hitNode, onBtn, toggle, pan, setSelectedId])
 
-  const handleMouseMove = useCallback((e) => {
-    if (isDragging.current) {
-      const dx = (e.clientX - dragStart.current.x) / zoom
-      const dy = (e.clientY - dragStart.current.y) / zoom
-      setPan({ x: dragStart.current.px + dx, y: dragStart.current.py + dy })
-    } else {
-      const node = getNodeAt(e.clientX, e.clientY)
-      const nid = node ? node.id : null
-      if (nid !== hoveredRef.current) {
-        hoveredRef.current = nid
-        setHovered(nid)
-        canvasRef.current.style.cursor = nid ? 'pointer' : 'grab'
-      }
+  const onMove = useCallback(e => {
+    if (panning.current) {
+      const dx = (e.clientX - ps.current.x) / zoom
+      const dy = (e.clientY - ps.current.y) / zoom
+      setPan({ x: ps.current.px + dx, y: ps.current.py + dy })
+      return
     }
-  }, [getNodeAt, zoom, setPan])
+    const rect = cvs.current.getBoundingClientRect()
+    const n = hitNode(e.clientX - rect.left, e.clientY - rect.top)
+    const id = n?.id || null
+    if (id !== hovRef.current) {
+      hovRef.current = id
+      setHov(id)
+      cvs.current.style.cursor = id ? 'pointer' : 'grab'
+    }
+  }, [hitNode, zoom, setPan])
 
-  const handleMouseUp = useCallback(() => {
-    isDragging.current = false
-  }, [])
+  const onUp = useCallback(() => { panning.current = false }, [])
 
-  const handleDblClick = useCallback((e) => {
-    const node = getNodeAt(e.clientX, e.clientY)
-    if (node) onEdit(node)
-  }, [getNodeAt, onEdit])
+  const onDbl = useCallback(e => {
+    const rect = cvs.current.getBoundingClientRect()
+    const ex = e.clientX - rect.left
+    const ey = e.clientY - rect.top
+    const n = hitNode(ex, ey)
+    if (n && !onBtn(n, ex, ey)) onEdit(n)
+  }, [hitNode, onBtn, onEdit])
 
-  const handleWheel = useCallback((e) => {
+  const onWheel = useCallback(e => {
     e.preventDefault()
-    const delta = e.deltaY > 0 ? 0.9 : 1.1
-    setZoom(z => {
-      const newZ = Math.min(Math.max(z * delta, 0.2), 3)
-      return newZ
-    })
+    const f = e.deltaY < 0 ? 1.12 : 0.89
+    setZoom(z => Math.min(Math.max(z * f, 0.1), 5))
   }, [setZoom])
 
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (selectedId && selectedId !== 'root') onDelete(selectedId)
-    }
-    if (e.key === 'n' || e.key === 'N') {
-      if (selectedId) onAddChild(selectedId)
-    }
-    if (e.key === 'Escape') setSelectedId(null)
-    if (e.key === 'Enter' && selectedId) {
-      const layout = layoutRef.current
-      if (layout) {
-        const nodes = flattenTree(layout)
-        const node = nodes.find(n => n.id === selectedId)
-        if (node) onEdit(node)
-      }
-    }
-  }, [selectedId, onDelete, onAddChild, setSelectedId, onEdit])
-
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleKeyDown])
-
-  // Context menu on right click
-  const handleContextMenu = useCallback((e) => {
-    e.preventDefault()
-    const node = getNodeAt(e.clientX, e.clientY)
-    if (node) {
-      setSelectedId(node.id)
-      onEdit(node)
+    const h = e => {
+      if (['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && selectedId !== 'root')
+        onDelete(selectedId)
+      if ((e.key === 'n' || e.key === 'N') && selectedId) onAddChild(selectedId)
+      if (e.key === 'Escape') setSelectedId(null)
+      if (e.key === ' ' && selectedId) { e.preventDefault(); toggle(selectedId) }
     }
-  }, [getNodeAt, setSelectedId, onEdit])
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [selectedId, onDelete, onAddChild, setSelectedId, toggle])
 
   return (
     <div className="mindmap-container">
       <canvas
-        ref={canvasRef}
-        className="mindmap-canvas"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onDoubleClick={handleDblClick}
-        onWheel={handleWheel}
-        onContextMenu={handleContextMenu}
+        ref={cvs} className="mindmap-canvas"
+        onMouseDown={onDown} onMouseMove={onMove}
+        onMouseUp={onUp} onMouseLeave={onUp}
+        onDoubleClick={onDbl} onWheel={onWheel}
       />
       {selectedId && selectedId !== 'root' && (
         <div className="node-actions">
-          <button onClick={() => onAddChild(selectedId)}>+ Qo'shish</button>
+          <button onClick={() => onAddChild(selectedId)}>+ Node</button>
           <button onClick={() => {
-            const nodes = flattenTree(layoutRef.current)
-            const node = nodes.find(n => n.id === selectedId)
-            if (node) onEdit(node)
-          }}>✏ Tahrirlash</button>
-          <button className="del-btn" onClick={() => onDelete(selectedId)}>✕ O'chirish</button>
+            const n = flatNodes(treeRef.current || {children:[]}, colRef.current).find(x => x.id === selectedId)
+            if (n) onEdit(n)
+          }}>✏ Edit</button>
+          <button onClick={() => toggle(selectedId)}>
+            {collapsed.has(selectedId) ? '▶ Ochish' : '▼ Yopish'}
+          </button>
+          <button className="del-btn" onClick={() => onDelete(selectedId)}>✕ O'chir</button>
         </div>
       )}
     </div>
