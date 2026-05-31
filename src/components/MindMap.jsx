@@ -92,7 +92,12 @@ const MindMap = forwardRef(function MindMap(
 ) {
   const cvs = useRef(null)
   const treeRef = useRef(null)
-  const [collapsed, setCollapsed] = useState(new Set())
+  // Boshlanganda faqat root bolalari yopiq — faqat ALGO GROUP ko'rinadi
+  const [collapsed, setCollapsed] = useState(() => {
+    const ids = new Set()
+    ;(data.children || []).forEach(c => ids.add(c.id))
+    return ids
+  })
   const [hov, setHov] = useState(null)
   const hovRef = useRef(null)
   const panning = useRef(false)
@@ -257,9 +262,11 @@ const MindMap = forwardRef(function MindMap(
     treeRef.current = buildLayout(data, collapsed)
   }, [data, collapsed])
 
-  // initial build
+  // initial build — root bolalari yopiq boshlanadi
   useEffect(() => {
-    treeRef.current = buildLayout(data, new Set())
+    const initCol = new Set()
+    ;(data.children || []).forEach(ch => initCol.add(ch.id))
+    treeRef.current = buildLayout(data, initCol)
   }, [])
 
   const toggle = useCallback((id) => {
