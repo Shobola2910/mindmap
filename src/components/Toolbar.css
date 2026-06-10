@@ -45,3 +45,27 @@
   .tb-divider { margin:0 2px; }
   .toolbar { padding:0 8px; }
 }
+
+/* Project button */
+.tb-project-btn {
+  display:flex; align-items:center; gap:6px; height:28px; padding:0 10px;
+  background:var(--bg3); border:1px solid var(--border); border-radius:8px;
+  color:var(--text2); font-size:11px; cursor:pointer; max-width:160px; margin-left:8px;
+}
+.tb-project-btn:hover { border-color:var(--accent); color:var(--text); }
+.tb-project-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; text-align:left; font-weight:500; }
+
+/* Language switcher */
+.tb-lang-group { display:flex; align-items:center; gap:2px; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:2px; }
+.tb-lang-btn { height:24px; padding:0 6px; background:transparent; border:none; border-radius:6px; color:var(--text2); font-size:11px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:3px; }
+.tb-lang-btn:hover { color:var(--text); }
+.tb-lang-btn.active { background:var(--bg2); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+.tb-lang-label { font-size:10px; }
+
+@media (max-width:768px) {
+  .tb-project-name { max-width:80px; }
+  .tb-lang-label { display:none; }
+}
+@media (max-width:640px) {
+  .tb-project-btn { display:none; }
+}

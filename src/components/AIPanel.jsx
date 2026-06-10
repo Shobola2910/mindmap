@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react'
 import './AIPanel.css'
 
-export default function AIPanel({ selectedNode, onAddChild, onClose }) {
+export default function AIPanel({ selectedNode, onAddChild, onClose, lang, t: tFn }) {
+  const t = tFn || (k => k)
   const [suggestions, setSuggestions] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)

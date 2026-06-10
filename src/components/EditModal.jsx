@@ -8,7 +8,8 @@ const PRESET_COLORS = [
   '#e11d48', '#06b6d4', '#d97706', '#7c3aed',
 ]
 
-export default function EditModal({ node, onSave, onClose, onDelete }) {
+export default function EditModal({ node, onSave, onClose, onDelete, t: tFn }) {
+  const t = tFn || (k => k)
   const [label, setLabel] = useState(node.label)
   const [color, setColor] = useState(node.color || '#6366f1')
   const inputRef = useRef(null)
