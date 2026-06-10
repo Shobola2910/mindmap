@@ -1,51 +1,47 @@
 .toolbar {
-  height: 52px;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center;
-  padding: 0 16px;
-  gap: 12px;
-  flex-shrink: 0;
-  z-index: 100;
-  position: relative;
+  height: var(--toolbar-h); background:var(--bg2); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; padding:0 12px; gap:8px;
+  flex-shrink:0; z-index:100; position:relative;
 }
+.toolbar-left { display:flex; align-items:center; min-width:120px; }
+.toolbar-center { display:flex; align-items:center; gap:6px; flex:1; justify-content:center; flex-wrap:nowrap; overflow-x:auto; }
+.toolbar-right { display:flex; align-items:center; gap:4px; min-width:100px; justify-content:flex-end; }
 
-.toolbar-left { display: flex; align-items: center; min-width: 140px; }
-.toolbar-center { display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center; }
-.toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 140px; justify-content: flex-end; }
+.logo { display:flex; align-items:center; gap:7px; }
+.logo-icon { font-size:18px; color:var(--accent); }
+.logo-text { font-size:13px; font-weight:700; letter-spacing:.05em; color:var(--text); font-family:var(--mono); white-space:nowrap; }
+.logo-text span { color:var(--accent); }
 
-.logo { display: flex; align-items: center; gap: 8px; }
-.logo-icon { font-size: 20px; color: var(--accent); }
-.logo-text { font-size: 14px; font-weight: 700; letter-spacing: 0.05em; color: var(--text); font-family: var(--mono); }
-.logo-text span { color: var(--accent); }
-
-.tb-group { display: flex; align-items: center; gap: 2px; }
-.tb-divider { width: 1px; height: 24px; background: var(--border); margin: 0 8px; }
+.tb-group { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.tb-divider { width:1px; height:22px; background:var(--border); margin:0 4px; flex-shrink:0; }
 
 .tb-btn {
-  display: flex; align-items: center; gap: 5px;
-  height: 32px; padding: 0 10px;
-  background: transparent; border: 1px solid transparent;
-  border-radius: 8px; cursor: pointer;
-  color: var(--text2); font-family: var(--font);
-  font-size: 12px; font-weight: 500;
-  transition: all 0.15s;
-  white-space: nowrap;
+  display:flex; align-items:center; gap:4px;
+  height:30px; padding:0 9px;
+  background:transparent; border:1px solid transparent;
+  border-radius:7px; cursor:pointer; color:var(--text2);
+  font-size:12px; font-weight:500; white-space:nowrap; flex-shrink:0;
 }
-.tb-btn:hover:not(.disabled) {
-  background: var(--bg3);
-  border-color: var(--border);
-  color: var(--text);
-}
-.tb-btn.disabled { opacity: 0.35; cursor: not-allowed; }
-.icon-btn { padding: 0 8px; width: 32px; justify-content: center; }
-.tb-btn.danger:hover:not(.disabled) { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.3); color: #ef4444; }
+.tb-btn:hover:not(.disabled):not(:disabled) { background:var(--bg3); border-color:var(--border); color:var(--text); }
+.tb-btn.disabled, .tb-btn:disabled { opacity:0.35; cursor:not-allowed; }
+.icon-btn { padding:0 7px; width:30px; justify-content:center; }
+.tb-btn.danger:hover:not(.disabled) { background:rgba(239,68,68,.1); border-color:rgba(239,68,68,.3); color:#ef4444; }
+.tb-btn.active { background:rgba(99,102,241,.15); border-color:rgba(99,102,241,.4); color:var(--accent); }
 
 .tb-zoom-val {
-  height: 32px; min-width: 52px; padding: 0 8px;
-  background: var(--bg3); border: 1px solid var(--border);
-  border-radius: 8px; cursor: pointer;
-  color: var(--text); font-family: var(--mono);
-  font-size: 12px; text-align: center;
+  height:30px; min-width:48px; padding:0 6px;
+  background:var(--bg3); border:1px solid var(--border);
+  border-radius:7px; cursor:pointer; color:var(--text);
+  font-family:var(--mono); font-size:11px; text-align:center;
 }
-.tb-zoom-val:hover { border-color: var(--accent); color: var(--accent); }
+.tb-zoom-val:hover { border-color:var(--accent); color:var(--accent); }
+
+/* Mobile: hide text labels, show only icons */
+@media (max-width:640px) {
+  .toolbar-center { gap:2px; padding:0 4px; }
+  .tb-btn .tb-label { display:none; }
+  .tb-btn { padding:0 7px; }
+  .toolbar-left .logo-text { display:none; }
+  .tb-divider { margin:0 2px; }
+  .toolbar { padding:0 8px; }
+}
