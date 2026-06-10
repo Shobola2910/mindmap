@@ -5,9 +5,11 @@ import EditModal from './components/EditModal'
 import AIPanel from './components/AIPanel'
 import ProjectsModal from './components/ProjectsModal'
 import { t, getLang, setLang } from './i18n/index.js'
+import { translateTree } from './i18n/nodeLabels.js'
+import { DEFAULT_DATA } from './data.js'
 import {
   loadProjects, getActiveId, setActiveId,
-  updateProjectData, getProject
+  updateProjectData, getProject, saveProjects
 } from './store/projects.js'
 import './App.css'
 
@@ -22,9 +24,20 @@ export default function App() {
     const p = getProject(getActiveId()); return p?.name || 'ALGO MAP'
   })
 
+  // Birinchi ishga tushganda 'default' loyihaga DEFAULT_DATA yozamiz (faqat bir marta)
+  useState(() => {
+    const p = getProject('default')
+    if (p && (!p.data.children || p.data.children.length === 0)) {
+      p.data = deepClone(DEFAULT_DATA)
+      const all = loadProjects()
+      const idx = all.findIndex(x => x.id === 'default')
+      if (idx >= 0) { all[idx].data = deepClone(DEFAULT_DATA); saveProjects(all) }
+    }
+  })
+
   const [data, setDataRaw] = useState(() => {
     const p = getProject(getActiveId())
-    return p?.data ? deepClone(p.data) : deepClone(loadProjects()[0]?.data)
+    return p?.data ? deepClone(p.data) : deepClone(DEFAULT_DATA)
   })
 
   const [theme, setTheme] = useState(() => localStorage.getItem('algo_theme')||'dark')
@@ -44,7 +57,10 @@ export default function App() {
 
   // re-render on lang change
   const handleLangChange = useCallback((code) => {
-    setLang(code); setLangState(code)
+    setLang(code)
+    setLangState(code)
+    // Barcha nodelarni yangi tilga o'girish
+    setDataRaw(prev => translateTree(prev, code))
   }, [])
 
   // Switch project

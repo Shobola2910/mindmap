@@ -1,4 +1,7 @@
-import { DEFAULT_DATA } from '../data.js'
+// Yangi project uchun faqat root — bo'sh boshlanadi
+function emptyRoot() {
+  return { id: 'root', label: 'Yangi Loyiha', color: '#6366f1', children: [] }
+}
 
 const PROJECTS_KEY = 'algo_projects_v1'
 const ACTIVE_KEY = 'algo_active_project'
@@ -16,7 +19,7 @@ export function loadProjects() {
   const defaults = [{
     id: 'default',
     name: 'ALGO GROUP — Asosiy',
-    data: deepClone(DEFAULT_DATA),
+    data: emptyRoot(),
     createdAt: now(),
     updatedAt: now(),
   }]
@@ -42,7 +45,7 @@ export function createProject(name) {
   const newProj = {
     id,
     name: name || 'Yangi loyiha',
-    data: deepClone(DEFAULT_DATA),
+    data: emptyRoot(),
     createdAt: now(),
     updatedAt: now(),
   }
